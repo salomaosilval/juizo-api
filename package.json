@@ -1,0 +1,90 @@
+{
+  "name": "juizo-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=26.13.0 <27",
+    "npm": ">=11.20.0 <12"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": ">=26.13.0 <27",
+      "onFail": "error"
+    },
+    "packageManager": {
+      "name": "npm",
+      "version": ">=11.20.0 <12",
+      "onFail": "error"
+    }
+  },
+  "scripts": {
+    "prepare": "prisma generate && lefthook install",
+    "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
+    "build": "tsc --project tsconfig.build.json",
+    "start": "node --env-file-if-exists=.env dist/main.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "db:up": "docker compose up --detach --wait",
+    "db:down": "docker compose down",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:generate": "prisma generate",
+    "db:studio": "prisma studio",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "dependencies": {
+    "@fastify/cors": "11.3.1",
+    "@fastify/helmet": "13.2.0",
+    "@fastify/rate-limit": "11.2.1",
+    "@fastify/swagger": "9.9.2",
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
+    "@scalar/fastify-api-reference": "1.76.0",
+    "close-with-grace": "2.5.0",
+    "fastify": "5.12.7",
+    "fastify-type-provider-zod": "7.0.0",
+    "pino": "10.4.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
+    "@eslint/js": "10.0.1",
+    "@testcontainers/postgresql": "12.2.1",
+    "@types/node": "26.6.5",
+    "@vitest/coverage-v8": "5.0.5",
+    "eslint": "10.13.0",
+    "eslint-config-prettier": "10.1.8",
+    "jiti": "2.7.0",
+    "lefthook": "2.2.2",
+    "openapi-types": "12.1.3",
+    "pino-pretty": "13.2.0",
+    "prettier": "3.9.10",
+    "prisma": "7.10.1",
+    "testcontainers": "12.2.1",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0",
+    "vitest": "5.0.5"
+  },
+  "allowScripts": {
+    "@prisma/engines@7.10.1": true,
+    "prisma@7.10.1": true,
+    "esbuild@0.28.2": true,
+    "lefthook@2.2.2": true,
+    "fsevents@2.3.3": true,
+    "cpu-features": false,
+    "ssh2": false,
+    "protobufjs": false
+  }
+}

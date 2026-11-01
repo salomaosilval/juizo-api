@@ -1,29 +1,29 @@
 import { ConsentType } from '../../generated/prisma/client.js';
 import { isUniqueConstraintViolation } from '../../shared/database/prisma-client.js';
 import type { DatabaseClient } from '../../shared/database/prisma-client.js';
+import type { UserRecord } from './auth.repository.js';
 
-export interface NewPendingRegistration {
+export interface NewRegistrationToken {
   tokenHash: string;
   email: string;
+  expiresAt: Date;
+}
+
+export interface CompletedRegistration {
+  tokenHash: string;
   name: string;
   passwordHash: string;
   termsVersion: string;
   aiDataProcessingVersion: string | null;
-  createdAt: Date;
-  expiresAt: Date;
+  now: Date;
 }
 
 export interface RegistrationRepository {
   userExists(email: string): Promise<boolean>;
-  createPendingRegistration(registration: NewPendingRegistration): Promise<void>;
-  rotateLatestPendingToken(
-    email: string,
-    tokenHash: string,
-    expiresAt: Date,
-    now: Date,
-  ): Promise<boolean>;
-  completeRegistration(tokenHash: string, now: Date): Promise<'completed' | 'invalid_token'>;
-  deleteExpiredPendingRegistrations(now: Date): Promise<void>;
+  createToken(token: NewRegistrationToken): Promise<void>;
+  deleteExpiredTokens(now: Date): Promise<void>;
+  findEmailByValidToken(tokenHash: string, now: Date): Promise<string | null>;
+  completeRegistration(registration: CompletedRegistration): Promise<UserRecord | null>;
 }
 
 export function createRegistrationRepository(database: DatabaseClient): RegistrationRepository {
@@ -33,82 +33,79 @@ export function createRegistrationRepository(database: DatabaseClient): Registra
       return user !== null;
     },
 
-    async createPendingRegistration(registration) {
-      await database.pendingRegistration.create({ data: registration });
+    async createToken(token) {
+      await database.registrationToken.create({ data: token });
     },
 
-    async rotateLatestPendingToken(email, tokenHash, expiresAt, now) {
-      const latest = await database.pendingRegistration.findFirst({
-        where: { email, expiresAt: { gt: now } },
-        orderBy: { id: 'desc' },
-        select: { id: true },
-      });
-      if (!latest) {
-        return false;
-      }
-      await database.pendingRegistration.update({
-        where: { id: latest.id },
-        data: { tokenHash, expiresAt },
-      });
-      return true;
+    async deleteExpiredTokens(now) {
+      await database.registrationToken.deleteMany({ where: { expiresAt: { lte: now } } });
     },
 
-    async completeRegistration(tokenHash, now) {
+    async findEmailByValidToken(tokenHash, now) {
+      const token = await database.registrationToken.findFirst({
+        where: { tokenHash, expiresAt: { gt: now } },
+        select: { email: true },
+      });
+      return token?.email ?? null;
+    },
+
+    async completeRegistration({
+      tokenHash,
+      name,
+      passwordHash,
+      termsVersion,
+      aiDataProcessingVersion,
+      now,
+    }) {
       try {
         return await database.$transaction(async (transaction) => {
-          const pending = await transaction.pendingRegistration.findUnique({
-            where: { tokenHash },
-          });
-          if (!pending || pending.expiresAt <= now) {
-            return 'invalid_token';
+          const token = await transaction.registrationToken.findUnique({ where: { tokenHash } });
+          if (!token || token.expiresAt <= now) {
+            return null;
           }
 
-          await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${pending.email}, 0))`;
+          const { email } = token;
+          await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${email}, 0))`;
 
-          const { count } = await transaction.pendingRegistration.deleteMany({
-            where: { id: pending.id },
+          const { count } = await transaction.registrationToken.deleteMany({
+            where: { id: token.id },
           });
           if (count !== 1) {
-            return 'invalid_token';
+            return null;
           }
 
-          const { email, name, passwordHash, termsVersion, aiDataProcessingVersion } = pending;
-          const grantedAt = pending.createdAt;
-          await transaction.user.create({
+          const user = await transaction.user.create({
             data: {
               email,
               name,
               passwordHash,
               consents: {
                 create: [
-                  { type: ConsentType.TERMS_OF_USE, version: termsVersion, grantedAt },
-                  { type: ConsentType.PRIVACY_POLICY, version: termsVersion, grantedAt },
+                  { type: ConsentType.TERMS_OF_USE, version: termsVersion, grantedAt: now },
+                  { type: ConsentType.PRIVACY_POLICY, version: termsVersion, grantedAt: now },
                   ...(aiDataProcessingVersion
                     ? [
                         {
                           type: ConsentType.AI_DATA_PROCESSING,
                           version: aiDataProcessingVersion,
-                          grantedAt,
+                          grantedAt: now,
                         },
                       ]
                     : []),
                 ],
               },
             },
+            select: { id: true, name: true, email: true },
           });
-          await transaction.pendingRegistration.deleteMany({ where: { email } });
-          return 'completed';
+          await transaction.registrationToken.deleteMany({ where: { email } });
+          return user;
         });
       } catch (error) {
         if (isUniqueConstraintViolation(error)) {
-          return 'invalid_token';
+          return null;
         }
         throw error;
       }
-    },
-
-    async deleteExpiredPendingRegistrations(now) {
-      await database.pendingRegistration.deleteMany({ where: { expiresAt: { lte: now } } });
     },
   };
 }

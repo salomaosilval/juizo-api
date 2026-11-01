@@ -3,10 +3,11 @@ import {
   createAuthTestApp,
   SESSION_COOKIE_NAME,
   TEST_PASSWORD,
-  TEST_REGISTRATION,
+  TEST_EMAIL,
   TEST_START_TIME,
 } from '../../../test/auth-test-app.js';
 import type { AuthTestApp } from '../../../test/auth-test-app.js';
+import { emailAttemptKey } from './attempt-limiter.js';
 import { createAuthRepository } from './auth.repository.js';
 
 const HOUR_IN_MS = 3_600_000;
@@ -47,7 +48,7 @@ describe('sessions', () => {
 
       expect(response.statusCode).toBe(200);
       const user = await test.database.user.findUniqueOrThrow({
-        where: { email: TEST_REGISTRATION.email },
+        where: { email: TEST_EMAIL },
       });
       expect(response.json()).toEqual({
         user: { id: user.id, name: 'Rafael', email: 'rafael@example.com' },
@@ -152,6 +153,28 @@ describe('sessions', () => {
       }
     });
 
+    it('does not let one client lock out the owner on another network', async () => {
+      await failLogins(11);
+
+      expect((await test.login()).statusCode).toBe(429);
+      expect((await test.login({}, { remoteAddress: '203.0.113.9' })).statusCode).toBe(200);
+    });
+
+    it('caps distributed guessing on one email, whatever the network', async () => {
+      await test.database.attemptCounter.create({
+        data: {
+          key: emailAttemptKey('login', TEST_EMAIL),
+          attemptCount: 100,
+          windowStartedAt: TEST_START_TIME,
+        },
+      });
+
+      const response = await test.login({}, { remoteAddress: '203.0.113.9' });
+
+      expect(response.statusCode).toBe(429);
+      expect(response.cookies).toHaveLength(0);
+    });
+
     it('does not let an already blocked IP lock out an account', async () => {
       await failLoginsOnDifferentEmails(30);
       await failLogins(11);
@@ -190,7 +213,7 @@ describe('sessions', () => {
       const response = await test.getMe(token);
 
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toMatchObject({ user: { email: TEST_REGISTRATION.email } });
+      expect(response.json()).toMatchObject({ user: { email: TEST_EMAIL } });
     });
 
     it('never mixes users across sessions', async () => {
@@ -317,20 +340,20 @@ describe('sessions', () => {
     it('rejects a write from an origin that is not allowed', async () => {
       const response = await test.post(
         '/auth/register',
-        { ...TEST_REGISTRATION, email: 'new@example.com' },
+        { email: 'new@example.com' },
         { headers: { origin: 'https://evil.example' } },
       );
 
       expect(response.statusCode).toBe(403);
       expect(response.json()).toMatchObject({ code: 'FORBIDDEN_ORIGIN' });
-      await expect(test.database.pendingRegistration.count()).resolves.toBe(0);
+      await expect(test.database.registrationToken.count()).resolves.toBe(0);
     });
 
     it.each([
       '/auth/login',
       '/auth/logout',
-      '/auth/email-verification/resend',
-      '/auth/email-verification/confirm',
+      '/auth/register/token',
+      '/auth/register/complete',
       '/auth/password-reset/request',
       '/auth/password-reset/confirm',
     ])('protects %s as well', async (url) => {

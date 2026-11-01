@@ -1,19 +1,30 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
 import {
   createAuthTestApp,
+  SESSION_COOKIE_NAME,
+  TEST_EMAIL,
   TEST_PASSWORD,
-  TEST_REGISTRATION,
+  TEST_PROFILE,
   TEST_START_TIME,
 } from '../../../test/auth-test-app.js';
 import type { AuthTestApp } from '../../../test/auth-test-app.js';
 
 const HOUR_IN_MS = 3_600_000;
 const REGISTER = '/auth/register';
-const CONFIRM = '/auth/email-verification/confirm';
-const RESEND = '/auth/email-verification/resend';
+const TOKEN = '/auth/register/token';
+const COMPLETE = '/auth/register/complete';
 
-describe('registration and email verification', () => {
+describe('registration', () => {
   let test: AuthTestApp;
+
+  async function requestLink(email = TEST_EMAIL): Promise<string> {
+    await test.post(REGISTER, { email });
+    return test.tokenFromLastEmail();
+  }
+
+  function complete(token: string, overrides: object = {}, options: object = {}) {
+    return test.post(COMPLETE, { ...TEST_PROFILE, token, ...overrides }, options);
+  }
 
   beforeAll(async () => {
     test = await createAuthTestApp(inject('databaseUrl'));
@@ -28,109 +39,83 @@ describe('registration and email verification', () => {
   });
 
   describe('POST /auth/register', () => {
-    it('creates no account and no session until the email is confirmed', async () => {
-      const response = await test.post(REGISTER, TEST_REGISTRATION);
+    it('creates no account and no session, only sends a link', async () => {
+      const response = await test.post(REGISTER, { email: '  Rafael@Example.COM ' });
 
       expect(response.statusCode).toBe(202);
       expect(response.cookies).toHaveLength(0);
       await expect(test.database.user.count()).resolves.toBe(0);
-    });
-
-    it('sends the confirmation link with the token out of reach of servers and referrers', async () => {
-      await test.post(REGISTER, { ...TEST_REGISTRATION, email: '  Rafael@Example.COM ' });
-
       const [email] = test.sentEmails;
       expect(email?.to).toBe('rafael@example.com');
-      expect(email?.subject).toBe('Confirme seu e-mail para entrar no Juízo');
-      expect(email?.text).toContain(
-        `https://app.juizo.test/confirmar-email#token=${test.tokenFromLastEmail()}`,
-      );
-      expect(email?.html).toContain(`#token=${test.tokenFromLastEmail()}`);
+      expect(email?.subject).toBe('Confirme seu e-mail para criar sua conta no Juízo');
     });
 
-    it('stores a hashed password and only the hash of the token', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
-
-      const pending = await test.database.pendingRegistration.findFirstOrThrow();
-      expect(pending.passwordHash).toMatch(/^\$argon2id\$/);
-      expect(pending.tokenHash).not.toBe(test.tokenFromLastEmail());
-    });
-
-    it('never puts text chosen by the registrant in the email', async () => {
-      await test.post(REGISTER, { ...TEST_REGISTRATION, name: 'Acesse evil.example' });
+    it('keeps the token out of reach of servers and referrers', async () => {
+      const token = await requestLink();
 
       const [email] = test.sentEmails;
-      expect(email?.html).not.toContain('evil.example');
-      expect(email?.text).not.toContain('evil.example');
+      expect(email?.text).toContain(`https://app.juizo.test/finalizar-cadastro#token=${token}`);
+      expect(email?.html).toContain(`#token=${token}`);
     });
 
-    it('rejects a registration that did not accept the terms', async () => {
-      const response = await test.post(REGISTER, { ...TEST_REGISTRATION, hasAcceptedTerms: false });
+    it('stores only the hash of the token', async () => {
+      const token = await requestLink();
+
+      const stored = await test.database.registrationToken.findFirstOrThrow();
+      expect(stored.tokenHash).not.toBe(token);
+    });
+
+    it('accepts nothing but the email, so a stranger can leave no password or consent', async () => {
+      await test.post(REGISTER, { email: TEST_EMAIL, ...TEST_PROFILE, password: 'attacker-pass' });
+
+      const response = await complete(test.tokenFromLastEmail());
+
+      expect(response.statusCode).toBe(201);
+      expect((await test.login()).statusCode).toBe(200);
+      expect((await test.login({ password: 'attacker-pass' })).statusCode).toBe(401);
+    });
+
+    it('rejects an invalid email', async () => {
+      const response = await test.post(REGISTER, { email: 'not-an-email' });
 
       expect(response.statusCode).toBe(400);
       expect(test.sentEmails).toHaveLength(0);
     });
 
-    it.each([
-      ['a short password', { password: 'too-short' }],
-      ['an oversized password', { password: 'x'.repeat(129) }],
-      ['an invalid email', { email: 'not-an-email' }],
-      ['a blank name', { name: '   ' }],
-      ['control characters in the name', { name: 'Ra\u0000fael' }],
-    ])('rejects %s', async (_description, override) => {
-      const response = await test.post(REGISTER, { ...TEST_REGISTRATION, ...override });
-
-      expect(response.statusCode).toBe(400);
-      expect(response.json()).toMatchObject({ code: 'VALIDATION_ERROR' });
-    });
-
-    it('never echoes the password in a validation error', async () => {
-      const response = await test.post(REGISTER, { ...TEST_REGISTRATION, password: 'tiny-pw' });
-
-      expect(response.statusCode).toBe(400);
-      expect(response.body).not.toContain('tiny-pw');
-    });
-
     it('answers identically for an email in use, and only warns the owner', async () => {
-      const first = await test.post(REGISTER, TEST_REGISTRATION);
-      await test.post(CONFIRM, { token: test.tokenFromLastEmail() });
+      await test.createVerifiedUser();
+      test.sentEmails.length = 0;
+      const unused = await test.post(REGISTER, { email: 'new@example.com' });
       test.sentEmails.length = 0;
 
-      const second = await test.post(REGISTER, {
-        ...TEST_REGISTRATION,
-        name: 'Attacker',
-        password: 'attacker-password',
-      });
+      const taken = await test.post(REGISTER, { email: TEST_EMAIL });
 
-      expect(second.statusCode).toBe(first.statusCode);
-      expect(second.body).toBe(first.body);
+      expect(taken.statusCode).toBe(unused.statusCode);
+      expect(taken.body).toBe(unused.body);
       expect(test.sentEmails.map(({ subject }) => subject)).toEqual([
         'Você já tem uma conta no Juízo',
       ]);
       expect(test.sentEmails[0]?.text).not.toContain('#token=');
-      await expect(test.database.pendingRegistration.count()).resolves.toBe(0);
-      expect((await test.login()).statusCode).toBe(200);
-      expect((await test.login({ password: 'attacker-password' })).statusCode).toBe(401);
+      await expect(
+        test.database.registrationToken.count({ where: { email: TEST_EMAIL } }),
+      ).resolves.toBe(0);
     });
 
     it('still accepts the request when the email provider fails, and logs the failure', async () => {
       test.failEmails(true);
 
-      const response = await test.post(REGISTER, TEST_REGISTRATION);
+      const response = await test.post(REGISTER, { email: TEST_EMAIL });
 
       expect(response.statusCode).toBe(202);
       expect(test.backgroundFailures).toHaveLength(1);
     });
 
-    it('limits registrations per IP', async () => {
+    it('limits requests per IP', async () => {
       for (let attempt = 0; attempt < 10; attempt += 1) {
-        await test.post(REGISTER, { ...TEST_REGISTRATION, email: `user${attempt}@example.com` });
+        await test.post(REGISTER, { email: `user${attempt}@example.com` });
       }
 
-      const response = await test.post(REGISTER, {
-        ...TEST_REGISTRATION,
-        email: 'one-more@example.com',
-      });
+      const response = await test.post(REGISTER, { email: 'one-more@example.com' });
 
       expect(response.statusCode).toBe(429);
       expect(response.json()).toMatchObject({ code: 'TOO_MANY_ATTEMPTS' });
@@ -139,65 +124,104 @@ describe('registration and email verification', () => {
     it('stops emailing one address after 3 per hour from a client, without revealing it', async () => {
       const responses = [];
       for (let attempt = 0; attempt < 5; attempt += 1) {
-        responses.push(await test.post(REGISTER, TEST_REGISTRATION));
+        responses.push(await test.post(REGISTER, { email: TEST_EMAIL }));
       }
 
       expect(responses.map(({ statusCode }) => statusCode)).toEqual([202, 202, 202, 202, 202]);
       expect(test.sentEmails).toHaveLength(3);
 
       test.advanceTime(HOUR_IN_MS + 1);
-      await test.post(REGISTER, TEST_REGISTRATION);
+      await test.post(REGISTER, { email: TEST_EMAIL });
       expect(test.sentEmails).toHaveLength(4);
     });
 
     it('still emails the owner when another client used up its own limit', async () => {
       for (let attempt = 0; attempt < 5; attempt += 1) {
-        await test.post(REGISTER, TEST_REGISTRATION);
+        await test.post(REGISTER, { email: TEST_EMAIL });
       }
       test.sentEmails.length = 0;
 
-      await test.post(REGISTER, TEST_REGISTRATION, { remoteAddress: '203.0.113.9' });
+      await test.post(REGISTER, { email: TEST_EMAIL }, { remoteAddress: '203.0.113.9' });
 
       expect(test.sentEmails).toHaveLength(1);
     });
 
     it('caps the emails to one address at 10 per hour across clients', async () => {
       for (let attempt = 0; attempt < 12; attempt += 1) {
-        await test.post(REGISTER, TEST_REGISTRATION, {
-          remoteAddress: `203.0.113.${attempt + 1}`,
-        });
+        await test.post(
+          REGISTER,
+          { email: TEST_EMAIL },
+          { remoteAddress: `203.0.113.${attempt + 1}` },
+        );
       }
 
       expect(test.sentEmails).toHaveLength(10);
     });
 
-    it('removes expired registrations, which hold personal data', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
+    it('removes expired tokens', async () => {
+      await requestLink();
       test.advanceTime(24 * HOUR_IN_MS);
 
-      await test.post(REGISTER, { ...TEST_REGISTRATION, email: 'ana@example.com' });
+      await requestLink('ana@example.com');
 
-      const remaining = await test.database.pendingRegistration.findMany();
+      const remaining = await test.database.registrationToken.findMany();
       expect(remaining.map(({ email }) => email)).toEqual(['ana@example.com']);
     });
   });
 
-  describe('POST /auth/email-verification/confirm', () => {
-    it('creates the account, without signing in', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
+  describe('POST /auth/register/token', () => {
+    it('returns the email of a valid link, without consuming it', async () => {
+      const token = await requestLink();
 
-      const response = await test.post(CONFIRM, { token: test.tokenFromLastEmail() });
+      const response = await test.post(TOKEN, { token });
 
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toEqual({ status: 'verified' });
-      expect(response.cookies).toHaveLength(0);
-      expect((await test.login()).statusCode).toBe(200);
+      expect(response.json()).toEqual({ email: TEST_EMAIL });
+      expect((await complete(token)).statusCode).toBe(201);
     });
 
-    it('records terms, privacy and AI consents with the date they were given', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
+    it('rejects a forged token, an expired one and the stored hash', async () => {
+      const token = await requestLink();
+      const { tokenHash } = await test.database.registrationToken.findFirstOrThrow();
+
+      expect((await test.post(TOKEN, { token: 'forged' })).statusCode).toBe(400);
+      expect((await test.post(TOKEN, { token: tokenHash })).statusCode).toBe(400);
+
+      test.advanceTime(24 * HOUR_IN_MS);
+      const expired = await test.post(TOKEN, { token });
+      expect(expired.statusCode).toBe(400);
+      expect(expired.json()).toMatchObject({ code: 'INVALID_TOKEN' });
+    });
+  });
+
+  describe('POST /auth/register/complete', () => {
+    it('creates the account with a hashed password and starts a session', async () => {
+      const response = await complete(await requestLink());
+
+      expect(response.statusCode).toBe(201);
+      const user = await test.database.user.findUniqueOrThrow({ where: { email: TEST_EMAIL } });
+      expect(response.json()).toEqual({
+        user: { id: user.id, name: 'Rafael', email: TEST_EMAIL },
+      });
+      expect(user.passwordHash).toMatch(/^\$argon2id\$/);
+      expect(user.passwordHash).not.toContain(TEST_PASSWORD);
+      const { value } = test.sessionCookieOf(response);
+      expect((await test.getMe(value)).statusCode).toBe(200);
+    });
+
+    it('takes the email from the link, not from the request', async () => {
+      const response = await complete(await requestLink(), { email: 'other@example.com' });
+
+      expect(response.json()).toMatchObject({ user: { email: TEST_EMAIL } });
+      await expect(
+        test.database.user.count({ where: { email: 'other@example.com' } }),
+      ).resolves.toBe(0);
+    });
+
+    it('records terms, privacy and AI consents with version and date', async () => {
+      const token = await requestLink();
       test.advanceTime(HOUR_IN_MS);
-      await test.post(CONFIRM, { token: test.tokenFromLastEmail() });
+      await complete(token);
 
       const consents = await test.database.consent.findMany({ orderBy: { type: 'asc' } });
       expect(consents.map(({ type }) => type)).toEqual([
@@ -205,173 +229,146 @@ describe('registration and email verification', () => {
         'PRIVACY_POLICY',
         'AI_DATA_PROCESSING',
       ]);
-      expect(consents[0]).toMatchObject({ version: '1', grantedAt: TEST_START_TIME });
+      expect(consents[0]).toMatchObject({
+        version: '1',
+        grantedAt: new Date(TEST_START_TIME.getTime() + HOUR_IN_MS),
+      });
     });
 
-    it('does not record AI consent when the user declined it', async () => {
-      await test.post(REGISTER, { ...TEST_REGISTRATION, hasConsentedToAiDataProcessing: false });
-      await test.post(CONFIRM, { token: test.tokenFromLastEmail() });
+    it('does not record AI consent when the user declines it', async () => {
+      await complete(await requestLink(), { hasConsentedToAiDataProcessing: false });
 
       const consents = await test.database.consent.findMany();
       expect(consents.map(({ type }) => type)).not.toContain('AI_DATA_PROCESSING');
     });
 
-    it('works only once', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
-      const token = test.tokenFromLastEmail();
-      await test.post(CONFIRM, { token });
+    it('rejects a completion that did not accept the terms', async () => {
+      const token = await requestLink();
 
-      const response = await test.post(CONFIRM, { token });
+      const response = await complete(token, { hasAcceptedTerms: false });
+
+      expect(response.statusCode).toBe(400);
+      await expect(test.database.user.count()).resolves.toBe(0);
+    });
+
+    it.each([
+      ['a short password', { password: 'too-short' }],
+      ['an oversized password', { password: 'x'.repeat(129) }],
+      ['a blank name', { name: '   ' }],
+      ['control characters in the name', { name: 'Ra\u0000fael' }],
+    ])('rejects %s and keeps the link usable', async (_description, override) => {
+      const token = await requestLink();
+
+      const invalid = await complete(token, override);
+      const valid = await complete(token);
+
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json()).toMatchObject({ code: 'VALIDATION_ERROR' });
+      expect(valid.statusCode).toBe(201);
+    });
+
+    it('never echoes the password in a validation error', async () => {
+      const response = await complete(await requestLink(), { password: 'tiny-pw' });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).not.toContain('tiny-pw');
+    });
+
+    it('works only once', async () => {
+      const token = await requestLink();
+      await complete(token);
+
+      const response = await complete(token, { password: 'attacker-password' });
 
       expect(response.statusCode).toBe(400);
       expect(response.json()).toMatchObject({ code: 'INVALID_TOKEN' });
+      expect((await test.login({ password: 'attacker-password' })).statusCode).toBe(401);
     });
 
-    it('creates one account when the same link is confirmed concurrently', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
-      const token = test.tokenFromLastEmail();
+    it('creates one account when the same link is used concurrently', async () => {
+      const token = await requestLink();
 
-      const responses = await Promise.all([
-        test.post(CONFIRM, { token }),
-        test.post(CONFIRM, { token }),
-        test.post(CONFIRM, { token }),
-      ]);
+      const responses = await Promise.all([complete(token), complete(token), complete(token)]);
 
-      expect(responses.map(({ statusCode }) => statusCode).sort()).toEqual([200, 400, 400]);
+      expect(responses.map(({ statusCode }) => statusCode).sort()).toEqual([201, 400, 400]);
       await expect(test.database.user.count()).resolves.toBe(1);
     });
 
-    it('creates one account when different links of an email are confirmed concurrently', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
-      const first = test.tokenFromLastEmail();
-      await test.post(REGISTER, TEST_REGISTRATION);
-      const second = test.tokenFromLastEmail();
+    it('creates one account when different links of an email are used concurrently', async () => {
+      const first = await requestLink();
+      const second = await requestLink();
 
-      const responses = await Promise.all([
-        test.post(CONFIRM, { token: first }),
-        test.post(CONFIRM, { token: second }),
-      ]);
+      const responses = await Promise.all([complete(first), complete(second)]);
 
-      expect(responses.map(({ statusCode }) => statusCode).sort()).toEqual([200, 400]);
+      expect(responses.map(({ statusCode }) => statusCode).sort()).toEqual([201, 400]);
       await expect(test.database.user.count()).resolves.toBe(1);
+    });
+
+    it('invalidates the other links of the email', async () => {
+      const first = await requestLink();
+      const second = await requestLink();
+      await complete(second);
+
+      expect((await complete(first, { password: 'attacker-password' })).statusCode).toBe(400);
+      await expect(test.database.registrationToken.count()).resolves.toBe(0);
     });
 
     it('rejects a link after 24 hours', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
+      const token = await requestLink();
       test.advanceTime(24 * HOUR_IN_MS);
 
-      const response = await test.post(CONFIRM, { token: test.tokenFromLastEmail() });
+      const response = await complete(token);
 
       expect(response.statusCode).toBe(400);
       await expect(test.database.user.count()).resolves.toBe(0);
     });
 
     it('rejects a forged token and the stored hash', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
-      const { tokenHash } = await test.database.pendingRegistration.findFirstOrThrow();
+      await requestLink();
+      const { tokenHash } = await test.database.registrationToken.findFirstOrThrow();
 
-      expect((await test.post(CONFIRM, { token: 'forged' })).statusCode).toBe(400);
-      expect((await test.post(CONFIRM, { token: tokenHash })).statusCode).toBe(400);
+      expect((await complete('forged')).statusCode).toBe(400);
+      expect((await complete(tokenHash)).statusCode).toBe(400);
+    });
+
+    it('limits guesses per IP', async () => {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await complete(`forged-${attempt}`);
+      }
+
+      const response = await complete(await requestLink());
+
+      expect(response.statusCode).toBe(429);
+      await expect(test.database.user.count()).resolves.toBe(0);
+    });
+
+    it('uses a session that does not persist', async () => {
+      const response = await complete(await requestLink());
+
+      expect(test.sessionCookieOf(response).maxAge).toBe(86_400);
+      expect(response.cookies.map(({ name }) => name)).toEqual([SESSION_COOKIE_NAME]);
     });
   });
 
-  describe('someone registers an email that is not theirs', () => {
-    it('keeps the account of the real owner, who confirms their own link', async () => {
-      await test.post(REGISTER, { ...TEST_REGISTRATION, password: 'attacker-password' });
-      const attackerToken = test.tokenFromLastEmail();
-      await test.post(REGISTER, TEST_REGISTRATION);
+  describe('someone starts a registration for an email that is not theirs', () => {
+    it('gains nothing, and the owner chooses the password', async () => {
+      await test.post(REGISTER, { email: TEST_EMAIL }, { remoteAddress: '198.51.100.7' });
+      await test.post(REGISTER, { email: TEST_EMAIL });
 
-      await test.post(CONFIRM, { token: test.tokenFromLastEmail() });
+      await complete(test.tokenFromLastEmail());
 
       expect((await test.login()).statusCode).toBe(200);
-      expect((await test.login({ password: 'attacker-password' })).statusCode).toBe(401);
-      expect((await test.post(CONFIRM, { token: attackerToken })).statusCode).toBe(400);
-      await expect(test.database.pendingRegistration.count()).resolves.toBe(0);
+      await expect(test.database.user.count()).resolves.toBe(1);
     });
 
-    it('keeps the owner link valid when someone else registers afterwards', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
-      const ownerToken = test.tokenFromLastEmail();
-      await test.post(REGISTER, { ...TEST_REGISTRATION, password: 'attacker-password' });
+    it('cannot sign in, and the response matches an unknown email', async () => {
+      await test.post(REGISTER, { email: TEST_EMAIL });
 
-      const response = await test.post(CONFIRM, { token: ownerToken });
-
-      expect(response.statusCode).toBe(200);
-      expect((await test.login()).statusCode).toBe(200);
-      expect((await test.login({ password: 'attacker-password' })).statusCode).toBe(401);
-    });
-
-    it('cannot sign in while the email is not confirmed', async () => {
-      await test.post(REGISTER, { ...TEST_REGISTRATION, password: 'attacker-password' });
-
-      const pending = await test.login({ password: 'attacker-password' });
-      const unknown = await test.login({ email: 'nobody@example.com', password: TEST_PASSWORD });
+      const pending = await test.login();
+      const unknown = await test.login({ email: 'nobody@example.com' });
 
       expect(pending.statusCode).toBe(401);
       expect(pending.json()).toEqual(unknown.json());
-    });
-  });
-
-  describe('POST /auth/email-verification/resend', () => {
-    it('sends a new link and invalidates the previous one', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
-      const oldToken = test.tokenFromLastEmail();
-
-      const response = await test.post(RESEND, { email: TEST_REGISTRATION.email });
-      const newToken = test.tokenFromLastEmail();
-
-      expect(response.statusCode).toBe(202);
-      expect(newToken).not.toBe(oldToken);
-      expect((await test.post(CONFIRM, { token: oldToken })).statusCode).toBe(400);
-      expect((await test.post(CONFIRM, { token: newToken })).statusCode).toBe(200);
-    });
-
-    it('extends the validity of the link', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
-      test.advanceTime(23 * HOUR_IN_MS);
-      await test.post(RESEND, { email: TEST_REGISTRATION.email });
-      test.advanceTime(2 * HOUR_IN_MS);
-
-      const response = await test.post(CONFIRM, { token: test.tokenFromLastEmail() });
-
-      expect(response.statusCode).toBe(200);
-    });
-
-    it('answers identically for an unknown, an expired and a confirmed email, sending nothing', async () => {
-      await test.createVerifiedUser({ email: 'confirmed@example.com' });
-      await test.post(REGISTER, { ...TEST_REGISTRATION, email: 'expired@example.com' });
-      test.advanceTime(24 * HOUR_IN_MS);
-      test.sentEmails.length = 0;
-
-      const responses = await Promise.all(
-        ['nobody@example.com', 'expired@example.com', 'confirmed@example.com'].map((email) =>
-          test.post(RESEND, { email }),
-        ),
-      );
-
-      expect(responses.map(({ statusCode }) => statusCode)).toEqual([202, 202, 202]);
-      expect(new Set(responses.map(({ body }) => body)).size).toBe(1);
-      expect(test.sentEmails).toHaveLength(0);
-    });
-
-    it('shares the limit of 3 emails per hour with registration', async () => {
-      await test.post(REGISTER, TEST_REGISTRATION);
-
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        await test.post(RESEND, { email: TEST_REGISTRATION.email });
-      }
-
-      expect(test.sentEmails).toHaveLength(3);
-    });
-
-    it('limits requests per IP', async () => {
-      for (let attempt = 0; attempt < 10; attempt += 1) {
-        await test.post(RESEND, { email: `user${attempt}@example.com` });
-      }
-
-      const response = await test.post(RESEND, { email: 'one-more@example.com' });
-
-      expect(response.statusCode).toBe(429);
     });
   });
 });

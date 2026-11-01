@@ -70,21 +70,21 @@ function linkWithToken(webAppUrl: string, path: string, token: string): string {
   return new URL(`${path}#token=${token}`, webAppUrl).toString();
 }
 
-export function buildEmailVerificationEmail(
+export function buildRegistrationLinkEmail(
   to: string,
   webAppUrl: string,
   token: string,
 ): EmailMessage {
   return buildEmail({
     to,
-    subject: 'Confirme seu e-mail para entrar no Juízo',
+    subject: 'Confirme seu e-mail para criar sua conta no Juízo',
     title: 'Falta só confirmar seu e-mail.',
-    paragraphs: ['Clique no botão abaixo para ativar sua conta. Depois é só entrar com sua senha.'],
+    paragraphs: ['Clique no botão abaixo para escolher sua senha e criar a conta.'],
     action: {
-      label: 'Confirmar meu e-mail',
-      url: linkWithToken(webAppUrl, '/confirmar-email', token),
+      label: 'Confirmar e criar conta',
+      url: linkWithToken(webAppUrl, '/finalizar-cadastro', token),
     },
-    footnote: 'O link vale por 24 horas. Se você não criou uma conta no Juízo, ignore este e-mail.',
+    footnote: 'O link vale por 24 horas. Se você não pediu, ignore este e-mail: nada foi criado.',
   });
 }
 

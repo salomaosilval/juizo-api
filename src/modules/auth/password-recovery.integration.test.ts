@@ -1,9 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, inject, it } from 'vitest';
-import {
-  createAuthTestApp,
-  TEST_PASSWORD,
-  TEST_REGISTRATION,
-} from '../../../test/auth-test-app.js';
+import { createAuthTestApp, TEST_PASSWORD, TEST_EMAIL } from '../../../test/auth-test-app.js';
 import type { AuthTestApp } from '../../../test/auth-test-app.js';
 import { createAuthRepository } from './auth.repository.js';
 
@@ -11,7 +7,7 @@ const MINUTE_IN_MS = 60_000;
 const REQUEST = '/auth/password-reset/request';
 const CONFIRM = '/auth/password-reset/confirm';
 const NEW_PASSWORD = 'a brand new passphrase';
-const EMAIL = TEST_REGISTRATION.email;
+const EMAIL = TEST_EMAIL;
 
 describe('password recovery', () => {
   let test: AuthTestApp;
@@ -218,7 +214,7 @@ describe('password recovery', () => {
 
     it('releases an account locked by failed logins', async () => {
       for (let attempt = 0; attempt < 11; attempt += 1) {
-        await test.login({ password: 'wrong-password' }, { remoteAddress: `203.0.113.${attempt}` });
+        await test.login({ password: 'wrong-password' });
       }
       expect((await test.login()).statusCode).toBe(429);
 

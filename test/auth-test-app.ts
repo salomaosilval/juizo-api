@@ -11,9 +11,10 @@ export const SESSION_COOKIE_NAME = 'juizo_session';
 export const TEST_START_TIME = new Date('2026-11-01T12:00:00.000Z');
 export const TEST_PASSWORD = 'correct horse battery';
 
-export const TEST_REGISTRATION = {
+export const TEST_EMAIL = 'rafael@example.com';
+
+export const TEST_PROFILE = {
   name: 'Rafael',
-  email: 'rafael@example.com',
   password: TEST_PASSWORD,
   hasAcceptedTerms: true,
   hasConsentedToAiDataProcessing: true,
@@ -31,7 +32,7 @@ export interface AuthTestApp {
   login(overrides?: object, options?: InjectOptions): Promise<LightMyRequestResponse>;
   getMe(token: string): Promise<LightMyRequestResponse>;
   tokenFromLastEmail(): string;
-  createVerifiedUser(overrides?: object): Promise<void>;
+  createVerifiedUser(overrides?: { email?: string; name?: string }): Promise<void>;
   sessionCookieOf(response: LightMyRequestResponse): { value: string; maxAge?: number };
   close(): Promise<void>;
 }
@@ -103,22 +104,27 @@ export async function createAuthTestApp(
       shouldFailEmails = false;
       sentEmails.length = 0;
       backgroundFailures.length = 0;
-      await database.$executeRaw`TRUNCATE users, attempt_counters, pending_registrations CASCADE`;
+      await database.$executeRaw`TRUNCATE users, attempt_counters, registration_tokens CASCADE`;
     },
     login(overrides = {}, options = {}) {
       return post(
         '/auth/login',
-        { email: TEST_REGISTRATION.email, password: TEST_PASSWORD, ...overrides },
+        { email: TEST_EMAIL, password: TEST_PASSWORD, ...overrides },
         options,
       );
     },
     getMe(token) {
       return app.inject({ url: '/auth/me', cookies: { [SESSION_COOKIE_NAME]: token } });
     },
-    async createVerifiedUser(overrides = {}) {
-      await post('/auth/register', { ...TEST_REGISTRATION, ...overrides });
-      await post('/auth/email-verification/confirm', { token: tokenFromLastEmail() });
+    async createVerifiedUser({ email = TEST_EMAIL, name = TEST_PROFILE.name } = {}) {
+      await post('/auth/register', { email });
+      await post('/auth/register/complete', {
+        ...TEST_PROFILE,
+        name,
+        token: tokenFromLastEmail(),
+      });
       await database.attemptCounter.deleteMany();
+      await database.session.deleteMany({ where: { user: { email } } });
     },
     sessionCookieOf(response) {
       const cookie = response.cookies.find(({ name }) => name === SESSION_COOKIE_NAME);

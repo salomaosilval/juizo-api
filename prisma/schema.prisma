@@ -64,20 +64,15 @@ model AttemptCounter {
   @@map("attempt_counters")
 }
 
-model PendingRegistration {
-  id                      String   @id @default(uuid(7)) @db.Uuid
-  tokenHash               String   @unique @map("token_hash")
-  email                   String
-  name                    String
-  passwordHash            String   @map("password_hash")
-  termsVersion            String   @map("terms_version")
-  aiDataProcessingVersion String?  @map("ai_data_processing_version")
-  createdAt               DateTime @map("created_at") @db.Timestamptz(3)
-  expiresAt               DateTime @map("expires_at") @db.Timestamptz(3)
+model RegistrationToken {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  tokenHash String   @unique @map("token_hash")
+  email     String
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
 
   @@index([email])
   @@index([expiresAt])
-  @@map("pending_registrations")
+  @@map("registration_tokens")
 }
 
 model PasswordResetToken {

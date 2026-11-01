@@ -105,6 +105,7 @@ export function createPasswordRecoveryService({
       }
 
       await attemptLimiter.clear(emailAttemptKey(LOGIN_ATTEMPT_ACTION, email));
+      await attemptLimiter.clear(emailAndClientAttemptKey(LOGIN_ATTEMPT_ACTION, email, clientIp));
       backgroundTasks.run('notify password change', () =>
         emailSender.send(buildPasswordChangedEmail(email, webAppUrl)),
       );

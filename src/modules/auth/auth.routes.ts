@@ -19,14 +19,14 @@ const emailSchema = z.string().trim().toLowerCase().max(MAX_EMAIL_LENGTH).pipe(z
 const newPasswordSchema = z.string().min(MIN_PASSWORD_LENGTH).max(MAX_PASSWORD_LENGTH);
 const tokenSchema = z.string().min(1).max(MAX_TOKEN_LENGTH);
 
-const registrationBodySchema = z.object({
+const registrationCompletionBodySchema = z.object({
+  token: tokenSchema,
   name: z
     .string()
     .trim()
     .min(1)
     .max(MAX_NAME_LENGTH)
     .refine((name) => !CONTROL_CHARACTERS.test(name)),
-  email: emailSchema,
   password: newPasswordSchema,
   hasAcceptedTerms: z.literal(true),
   hasConsentedToAiDataProcessing: z.boolean(),
@@ -65,27 +65,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = (
     {
       schema: {
         tags: ['auth'],
-        summary: 'Starts a registration, answering the same whether or not the email is in use',
-        body: registrationBodySchema,
-        response: {
-          202: acceptedResponseSchema,
-          400: errorResponseSchema,
-          429: errorResponseSchema,
-        },
-      },
-    },
-    async ({ body, ip }, reply) => {
-      await registrationService.register({ ...body, clientIp: ip });
-      return reply.status(202).send({ status: 'accepted' });
-    },
-  );
-
-  app.post(
-    '/auth/email-verification/resend',
-    {
-      schema: {
-        tags: ['auth'],
-        summary: 'Sends a new confirmation link, answering the same for any email',
+        summary: 'Sends the registration link, answering the same for any email',
         body: z.object({ email: emailSchema }),
         response: {
           202: acceptedResponseSchema,
@@ -95,27 +75,39 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = (
       },
     },
     async ({ body: { email }, ip }, reply) => {
-      await registrationService.resendVerification(email, ip);
+      await registrationService.start(email, ip);
       return reply.status(202).send({ status: 'accepted' });
     },
   );
 
   app.post(
-    '/auth/email-verification/confirm',
+    '/auth/register/token',
     {
       schema: {
         tags: ['auth'],
-        summary: 'Confirms the email and creates the account, without signing in',
+        summary: 'Returns the email of a valid registration link',
         body: z.object({ token: tokenSchema }),
-        response: {
-          200: z.object({ status: z.literal('verified') }),
-          400: errorResponseSchema,
-        },
+        response: { 200: z.object({ email: z.email() }), 400: errorResponseSchema },
       },
     },
-    async ({ body: { token } }) => {
-      await registrationService.confirmEmail(token);
-      return { status: 'verified' as const };
+    async ({ body: { token } }) => ({ email: await registrationService.findEmailForToken(token) }),
+  );
+
+  app.post(
+    '/auth/register/complete',
+    {
+      schema: {
+        tags: ['auth'],
+        summary: 'Creates the account from a valid link and starts a session',
+        body: registrationCompletionBodySchema,
+        response: { 201: userResponseSchema, 400: errorResponseSchema, 429: errorResponseSchema },
+      },
+    },
+    async ({ body, ip }, reply) => {
+      const user = await registrationService.complete({ ...body, clientIp: ip });
+      const session = await authService.startSession(user.id);
+      sessionCookie.write(reply, session.token, session.expiresAt);
+      return reply.status(201).send({ user });
     },
   );
 

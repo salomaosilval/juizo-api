@@ -26,6 +26,7 @@ export interface NewSession {
 
 export interface AuthRepository {
   findCredentialsByEmail(email: string): Promise<UserCredentials | null>;
+  createSession(session: NewSession): Promise<void>;
   createSessionIfPasswordUnchanged(session: NewSession, passwordHash: string): Promise<boolean>;
   findSessionByTokenHash(tokenHash: string): Promise<SessionRecord | null>;
   renewSession(sessionId: string, expiresAt: Date): Promise<void>;
@@ -42,6 +43,10 @@ export function createAuthRepository(database: DatabaseClient): AuthRepository {
         where: { email },
         select: { ...USER_FIELDS, passwordHash: true },
       });
+    },
+
+    async createSession(session) {
+      await database.session.create({ data: session });
     },
 
     createSessionIfPasswordUnchanged(session, passwordHash) {

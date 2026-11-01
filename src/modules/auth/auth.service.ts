@@ -1,6 +1,6 @@
 import { AppError } from '../../shared/errors/app-error.js';
 import type { Clock } from '../../shared/time/clock.js';
-import { clientAttemptKey, emailAttemptKey } from './attempt-limiter.js';
+import { clientAttemptKey, emailAndClientAttemptKey, emailAttemptKey } from './attempt-limiter.js';
 import type { AttemptLimiter } from './attempt-limiter.js';
 import type { AuthRepository, UserRecord } from './auth.repository.js';
 import type { PasswordHasher } from './password-hasher.js';
@@ -9,7 +9,8 @@ import { computeSessionExpiry, isSessionExpired, shouldRenewSession } from './se
 
 const MINUTE_IN_MS = 60_000;
 
-const LOGIN_LIMIT_BY_EMAIL = { maxAttempts: 10, windowInMs: 15 * MINUTE_IN_MS };
+const LOGIN_LIMIT_BY_EMAIL_AND_CLIENT = { maxAttempts: 10, windowInMs: 15 * MINUTE_IN_MS };
+const LOGIN_LIMIT_BY_EMAIL = { maxAttempts: 100, windowInMs: 15 * MINUTE_IN_MS };
 const LOGIN_LIMIT_BY_CLIENT = { maxAttempts: 30, windowInMs: 15 * MINUTE_IN_MS };
 
 export const LOGIN_ATTEMPT_ACTION = 'login';
@@ -33,6 +34,7 @@ export interface Authentication {
 
 export interface AuthService {
   login(input: LoginInput): Promise<{ user: UserRecord; session: IssuedSession }>;
+  startSession(userId: string): Promise<IssuedSession>;
   logout(token: string): Promise<void>;
   authenticate(token: string): Promise<Authentication>;
 }
@@ -55,9 +57,11 @@ export function createAuthService({
   return {
     async login({ email, password, rememberMe, clientIp }) {
       const clientKey = clientAttemptKey(LOGIN_ATTEMPT_ACTION, clientIp);
+      const emailAndClientKey = emailAndClientAttemptKey(LOGIN_ATTEMPT_ACTION, email, clientIp);
       const emailKey = emailAttemptKey(LOGIN_ATTEMPT_ACTION, email);
       const isLimited =
         (await attemptLimiter.exceeds(clientKey, LOGIN_LIMIT_BY_CLIENT)) ||
+        (await attemptLimiter.exceeds(emailAndClientKey, LOGIN_LIMIT_BY_EMAIL_AND_CLIENT)) ||
         (await attemptLimiter.exceeds(emailKey, LOGIN_LIMIT_BY_EMAIL));
       if (isLimited) {
         throw new AppError('TOO_MANY_ATTEMPTS', 'Too many attempts. Try again later.');
@@ -72,7 +76,8 @@ export function createAuthService({
         throw new AppError('INVALID_CREDENTIALS', 'Email or password is incorrect.');
       }
 
-      await attemptLimiter.clear(emailKey);
+      await attemptLimiter.clear(emailAndClientKey);
+      await attemptLimiter.refund(emailKey);
       await attemptLimiter.refund(clientKey);
 
       const token = generateSecretToken();
@@ -94,6 +99,18 @@ export function createAuthService({
         user: { id: credentials.id, name: credentials.name, email: credentials.email },
         session: { token, expiresAt },
       };
+    },
+
+    async startSession(userId) {
+      const token = generateSecretToken();
+      const expiresAt = computeSessionExpiry(clock.now(), false);
+      await repository.createSession({
+        userId,
+        tokenHash: hashSecret(token),
+        isPersistent: false,
+        expiresAt,
+      });
+      return { token, expiresAt };
     },
 
     async logout(token) {

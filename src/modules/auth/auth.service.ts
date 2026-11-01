@@ -1,30 +1,18 @@
 import { AppError } from '../../shared/errors/app-error.js';
-import { toClientNetwork } from '../../shared/http/client-network.js';
 import type { Clock } from '../../shared/time/clock.js';
+import { clientAttemptKey, emailAttemptKey } from './attempt-limiter.js';
+import type { AttemptLimiter } from './attempt-limiter.js';
 import type { AuthRepository, UserRecord } from './auth.repository.js';
 import type { PasswordHasher } from './password-hasher.js';
+import { generateSecretToken, hashSecret } from './secret-token.js';
 import { computeSessionExpiry, isSessionExpired, shouldRenewSession } from './session-policy.js';
-import { generateSessionToken, hashSecret } from './session-token.js';
-
-const CURRENT_TERMS_VERSION = '1';
-const CURRENT_AI_DATA_PROCESSING_VERSION = '1';
 
 const MINUTE_IN_MS = 60_000;
 
-const ATTEMPT_LIMITS = {
-  loginByEmail: { maxAttempts: 10, windowInMs: 15 * MINUTE_IN_MS },
-  loginByIp: { maxAttempts: 30, windowInMs: 15 * MINUTE_IN_MS },
-  registrationByIp: { maxAttempts: 10, windowInMs: 60 * MINUTE_IN_MS },
-} as const;
+const LOGIN_LIMIT_BY_EMAIL = { maxAttempts: 10, windowInMs: 15 * MINUTE_IN_MS };
+const LOGIN_LIMIT_BY_CLIENT = { maxAttempts: 30, windowInMs: 15 * MINUTE_IN_MS };
 
-export interface RegistrationInput {
-  name: string;
-  email: string;
-  password: string;
-  hasAcceptedTerms: true;
-  hasConsentedToAiDataProcessing: boolean;
-  clientIp: string;
-}
+export const LOGIN_ATTEMPT_ACTION = 'login';
 
 export interface LoginInput {
   email: string;
@@ -44,7 +32,6 @@ export interface Authentication {
 }
 
 export interface AuthService {
-  register(input: RegistrationInput): Promise<void>;
   login(input: LoginInput): Promise<{ user: UserRecord; session: IssuedSession }>;
   logout(token: string): Promise<void>;
   authenticate(token: string): Promise<Authentication>;
@@ -52,6 +39,7 @@ export interface AuthService {
 
 interface AuthServiceDependencies {
   repository: AuthRepository;
+  attemptLimiter: AttemptLimiter;
   passwordHasher: PasswordHasher;
   clock: Clock;
   decoyPasswordHash: string;
@@ -59,85 +47,48 @@ interface AuthServiceDependencies {
 
 export function createAuthService({
   repository,
+  attemptLimiter,
   passwordHasher,
   clock,
   decoyPasswordHash,
 }: AuthServiceDependencies): AuthService {
-  async function exceedsLimit(
-    key: string,
-    limit: { maxAttempts: number; windowInMs: number },
-  ): Promise<boolean> {
-    const now = clock.now();
-    const windowStart = new Date(now.getTime() - limit.windowInMs);
-    const attempts = await repository.countAttempt(key, now, windowStart);
-    return attempts > limit.maxAttempts;
-  }
-
-  function tooManyAttempts(): AppError {
-    return new AppError('TOO_MANY_ATTEMPTS', 'Too many attempts. Try again later.');
-  }
-
   return {
-    async register({
-      name,
-      email,
-      password,
-      hasConsentedToAiDataProcessing,
-      clientIp,
-    }: RegistrationInput) {
-      if (
-        await exceedsLimit(
-          `registration:ip:${toClientNetwork(clientIp)}`,
-          ATTEMPT_LIMITS.registrationByIp,
-        )
-      ) {
-        throw tooManyAttempts();
-      }
-
-      const passwordHash = await passwordHasher.hash(password);
-      await repository.createUser({
-        name,
-        email,
-        passwordHash,
-        consents: {
-          terms: { version: CURRENT_TERMS_VERSION },
-          aiDataProcessing: hasConsentedToAiDataProcessing
-            ? { version: CURRENT_AI_DATA_PROCESSING_VERSION }
-            : null,
-        },
-        now: clock.now(),
-      });
-    },
-
     async login({ email, password, rememberMe, clientIp }) {
-      const ipKey = `login:ip:${toClientNetwork(clientIp)}`;
-      const emailKey = `login:email:${hashSecret(email)}`;
-      if (await exceedsLimit(ipKey, ATTEMPT_LIMITS.loginByIp)) {
-        throw tooManyAttempts();
-      }
-      if (await exceedsLimit(emailKey, ATTEMPT_LIMITS.loginByEmail)) {
-        throw tooManyAttempts();
+      const clientKey = clientAttemptKey(LOGIN_ATTEMPT_ACTION, clientIp);
+      const emailKey = emailAttemptKey(LOGIN_ATTEMPT_ACTION, email);
+      const isLimited =
+        (await attemptLimiter.exceeds(clientKey, LOGIN_LIMIT_BY_CLIENT)) ||
+        (await attemptLimiter.exceeds(emailKey, LOGIN_LIMIT_BY_EMAIL));
+      if (isLimited) {
+        throw new AppError('TOO_MANY_ATTEMPTS', 'Too many attempts. Try again later.');
       }
 
       const credentials = await repository.findCredentialsByEmail(email);
-      const isPasswordValid = credentials
-        ? await passwordHasher.verify(password, credentials.passwordHash)
-        : await passwordHasher.verify(password, decoyPasswordHash);
+      const isPasswordValid = await passwordHasher.verify(
+        password,
+        credentials?.passwordHash ?? decoyPasswordHash,
+      );
       if (!credentials || !isPasswordValid) {
         throw new AppError('INVALID_CREDENTIALS', 'Email or password is incorrect.');
       }
 
-      await repository.clearAttempts(emailKey);
-      await repository.refundAttempt(ipKey);
+      await attemptLimiter.clear(emailKey);
+      await attemptLimiter.refund(clientKey);
 
-      const token = generateSessionToken();
+      const token = generateSecretToken();
       const expiresAt = computeSessionExpiry(clock.now(), rememberMe);
-      await repository.createSession({
-        userId: credentials.id,
-        tokenHash: hashSecret(token),
-        isPersistent: rememberMe,
-        expiresAt,
-      });
+      const isSessionCreated = await repository.createSessionIfPasswordUnchanged(
+        {
+          userId: credentials.id,
+          tokenHash: hashSecret(token),
+          isPersistent: rememberMe,
+          expiresAt,
+        },
+        credentials.passwordHash,
+      );
+      if (!isSessionCreated) {
+        throw new AppError('INVALID_CREDENTIALS', 'Email or password is incorrect.');
+      }
 
       return {
         user: { id: credentials.id, name: credentials.name, email: credentials.email },

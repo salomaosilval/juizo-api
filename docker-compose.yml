@@ -18,5 +18,11 @@ services:
       timeout: 3s
       retries: 10
 
+  mailpit:
+    image: axllent/mailpit:v1.32.0
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:${MAILPIT_PORT:-8025}:8025'
+
 volumes:
   postgres-data:

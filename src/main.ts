@@ -3,7 +3,7 @@ import { buildApp } from './app.js';
 import { parseEnv } from './config/env.js';
 import { createDatabaseClient } from './shared/database/prisma-client.js';
 
-const SHUTDOWN_TIMEOUT_IN_MS = 10_000;
+const SHUTDOWN_TIMEOUT_IN_MS = 15_000;
 
 const env = parseEnv(process.env);
 const app = await buildApp({ env, database: createDatabaseClient(env.DATABASE_URL) });

@@ -10,16 +10,39 @@ const commaSeparatedUrls = z
   )
   .pipe(z.array(z.url()));
 
-const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']),
-  HOST: z.string().min(1).default('0.0.0.0'),
-  PORT: z.coerce.number().int().min(0).max(65_535).default(3333),
-  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
-  DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
-  CORS_ALLOWED_ORIGINS: commaSeparatedUrls,
-  RATE_LIMIT_MAX_PER_MINUTE: z.coerce.number().int().positive().default(120),
-  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
-});
+const envSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']),
+    HOST: z.string().min(1).default('0.0.0.0'),
+    PORT: z.coerce.number().int().min(0).max(65_535).default(3333),
+    LOG_LEVEL: z
+      .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
+      .default('info'),
+    DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
+    CORS_ALLOWED_ORIGINS: commaSeparatedUrls,
+    RATE_LIMIT_MAX_PER_MINUTE: z.coerce.number().int().positive().default(120),
+    TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
+    WEB_APP_URL: z.url({ protocol: /^https?$/ }),
+    EMAIL_PROVIDER: z.enum(['mailpit', 'resend']).default('mailpit'),
+    EMAIL_FROM_NAME: z.string().min(1).default('Juízo'),
+    EMAIL_FROM_ADDRESS: z.email(),
+    MAILPIT_URL: z.url().default('http://localhost:8025'),
+    RESEND_API_KEY: z
+      .string()
+      .optional()
+      .transform((key) => (key === '' ? undefined : key)),
+  })
+  .superRefine(({ NODE_ENV, EMAIL_PROVIDER, RESEND_API_KEY, WEB_APP_URL }, context) => {
+    if (EMAIL_PROVIDER === 'resend' && !RESEND_API_KEY) {
+      context.addIssue({ code: 'custom', path: ['RESEND_API_KEY'], message: 'Required.' });
+    }
+    if (NODE_ENV === 'production' && EMAIL_PROVIDER !== 'resend') {
+      context.addIssue({ code: 'custom', path: ['EMAIL_PROVIDER'], message: 'Must be resend.' });
+    }
+    if (NODE_ENV === 'production' && !WEB_APP_URL.startsWith('https://')) {
+      context.addIssue({ code: 'custom', path: ['WEB_APP_URL'], message: 'Must use https.' });
+    }
+  });
 
 export type Env = z.infer<typeof envSchema>;
 

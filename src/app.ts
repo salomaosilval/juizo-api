@@ -14,9 +14,13 @@ import type { Env } from './config/env.js';
 import { registerAuthModule } from './modules/auth/index.js';
 import { registerHealthModule } from './modules/health/index.js';
 import type { DatabaseClient } from './shared/database/prisma-client.js';
+import { createEmailSender } from './shared/email/create-email-sender.js';
+import type { EmailSender } from './shared/email/email-sender.js';
 import { toClientNetwork } from './shared/http/client-network.js';
 import { handleError, handleNotFound } from './shared/http/error-handler.js';
 import { createOriginGuard } from './shared/http/origin-guard.js';
+import { createBackgroundTasks } from './shared/tasks/background-tasks.js';
+import type { BackgroundTasks } from './shared/tasks/background-tasks.js';
 import { systemClock } from './shared/time/clock.js';
 import type { Clock } from './shared/time/clock.js';
 
@@ -26,6 +30,8 @@ export interface AppDependencies {
   env: Env;
   database: DatabaseClient;
   clock?: Clock;
+  emailSender?: EmailSender;
+  backgroundTasks?: BackgroundTasks;
 }
 
 function buildLoggerOptions(env: Env): NonNullable<FastifyServerOptions['logger']> {
@@ -37,6 +43,8 @@ export async function buildApp({
   env,
   database,
   clock = systemClock,
+  emailSender = createEmailSender(env),
+  backgroundTasks,
 }: AppDependencies): Promise<FastifyInstance> {
   const app = fastify({
     logger: buildLoggerOptions(env),
@@ -66,14 +74,20 @@ export async function buildApp({
     await app.register(apiReference, { routePrefix: '/docs' });
   }
 
+  const tasks = backgroundTasks ?? createBackgroundTasks(app.log);
+
   await registerHealthModule(app, database);
   await registerAuthModule(app, {
     database,
     clock,
     useSecureCookies: env.NODE_ENV === 'production',
+    emailSender,
+    backgroundTasks: tasks,
+    webAppUrl: env.WEB_APP_URL,
   });
 
   app.addHook('onClose', async () => {
+    await tasks.drain();
     await database.$disconnect();
   });
 

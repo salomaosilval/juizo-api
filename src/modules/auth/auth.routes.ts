@@ -2,6 +2,8 @@ import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { errorResponseSchema } from '../../shared/http/error-response.js';
 import type { AuthService } from './auth.service.js';
+import type { PasswordRecoveryService } from './password-recovery.service.js';
+import type { RegistrationService } from './registration.service.js';
 import { getAuthenticatedUser } from './require-auth.js';
 import type { RequireAuth } from './require-auth.js';
 import type { SessionCookie } from './session-cookie.js';
@@ -10,9 +12,12 @@ const MIN_PASSWORD_LENGTH = 10;
 const MAX_PASSWORD_LENGTH = 128;
 const MAX_EMAIL_LENGTH = 254;
 const MAX_NAME_LENGTH = 80;
+const MAX_TOKEN_LENGTH = 128;
 const CONTROL_CHARACTERS = /\p{Cc}/u;
 
 const emailSchema = z.string().trim().toLowerCase().max(MAX_EMAIL_LENGTH).pipe(z.email());
+const newPasswordSchema = z.string().min(MIN_PASSWORD_LENGTH).max(MAX_PASSWORD_LENGTH);
+const tokenSchema = z.string().min(1).max(MAX_TOKEN_LENGTH);
 
 const registrationBodySchema = z.object({
   name: z
@@ -22,7 +27,7 @@ const registrationBodySchema = z.object({
     .max(MAX_NAME_LENGTH)
     .refine((name) => !CONTROL_CHARACTERS.test(name)),
   email: emailSchema,
-  password: z.string().min(MIN_PASSWORD_LENGTH).max(MAX_PASSWORD_LENGTH),
+  password: newPasswordSchema,
   hasAcceptedTerms: z.literal(true),
   hasConsentedToAiDataProcessing: z.boolean(),
 });
@@ -37,15 +42,19 @@ const userResponseSchema = z.object({
   user: z.object({ id: z.uuid(), name: z.string(), email: z.email() }),
 });
 
+const acceptedResponseSchema = z.object({ status: z.literal('accepted') });
+
 interface AuthRoutesOptions {
   authService: AuthService;
+  registrationService: RegistrationService;
+  passwordRecoveryService: PasswordRecoveryService;
   requireAuth: RequireAuth;
   sessionCookie: SessionCookie;
 }
 
 export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = (
   app,
-  { authService, requireAuth, sessionCookie },
+  { authService, registrationService, passwordRecoveryService, requireAuth, sessionCookie },
 ) => {
   app.addHook('onSend', async (_request, reply) => {
     void reply.header('cache-control', 'no-store');
@@ -56,18 +65,97 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = (
     {
       schema: {
         tags: ['auth'],
-        summary: 'Registers an account, answering the same whether or not the email is in use',
+        summary: 'Starts a registration, answering the same whether or not the email is in use',
         body: registrationBodySchema,
         response: {
-          202: z.object({ status: z.literal('accepted') }),
+          202: acceptedResponseSchema,
           400: errorResponseSchema,
           429: errorResponseSchema,
         },
       },
     },
     async ({ body, ip }, reply) => {
-      await authService.register({ ...body, clientIp: ip });
+      await registrationService.register({ ...body, clientIp: ip });
       return reply.status(202).send({ status: 'accepted' });
+    },
+  );
+
+  app.post(
+    '/auth/email-verification/resend',
+    {
+      schema: {
+        tags: ['auth'],
+        summary: 'Sends a new confirmation link, answering the same for any email',
+        body: z.object({ email: emailSchema }),
+        response: {
+          202: acceptedResponseSchema,
+          400: errorResponseSchema,
+          429: errorResponseSchema,
+        },
+      },
+    },
+    async ({ body: { email }, ip }, reply) => {
+      await registrationService.resendVerification(email, ip);
+      return reply.status(202).send({ status: 'accepted' });
+    },
+  );
+
+  app.post(
+    '/auth/email-verification/confirm',
+    {
+      schema: {
+        tags: ['auth'],
+        summary: 'Confirms the email and creates the account, without signing in',
+        body: z.object({ token: tokenSchema }),
+        response: {
+          200: z.object({ status: z.literal('verified') }),
+          400: errorResponseSchema,
+        },
+      },
+    },
+    async ({ body: { token } }) => {
+      await registrationService.confirmEmail(token);
+      return { status: 'verified' as const };
+    },
+  );
+
+  app.post(
+    '/auth/password-reset/request',
+    {
+      schema: {
+        tags: ['auth'],
+        summary: 'Sends a password reset link, answering the same for any email',
+        body: z.object({ email: emailSchema }),
+        response: {
+          202: acceptedResponseSchema,
+          400: errorResponseSchema,
+          429: errorResponseSchema,
+        },
+      },
+    },
+    async ({ body: { email }, ip }, reply) => {
+      await passwordRecoveryService.requestReset(email, ip);
+      return reply.status(202).send({ status: 'accepted' });
+    },
+  );
+
+  app.post(
+    '/auth/password-reset/confirm',
+    {
+      schema: {
+        tags: ['auth'],
+        summary: 'Sets a new password and ends every session of the account',
+        body: z.object({ token: tokenSchema, password: newPasswordSchema }),
+        response: {
+          200: z.object({ status: z.literal('password_updated') }),
+          400: errorResponseSchema,
+          429: errorResponseSchema,
+        },
+      },
+    },
+    async ({ body: { token, password }, ip }) => {
+      await passwordRecoveryService.resetPassword(token, password, ip);
+      return { status: 'password_updated' as const };
     },
   );
 

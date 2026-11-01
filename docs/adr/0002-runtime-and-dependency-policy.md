@@ -8,6 +8,7 @@ Status: accepted, 2026-10-31
 - `engines`, `devEngines`, `engine-strict` and `.nvmrc` make npm reject any other version, locally and in CI.
 - Pin exact dependency versions and refuse packages published less than 7 days ago, which limits exposure to compromised releases.
 - Fail CI on high or critical vulnerabilities in production dependencies.
+- Fail CI when the pinned Node is older than the last security release of its line or past its end of life. The check runs on every push and daily, using the official nodejs.org data.
 
 ## Held-back versions
 

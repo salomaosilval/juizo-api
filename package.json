@@ -40,7 +40,8 @@
     "db:deploy": "prisma migrate deploy",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build",
+    "check:node": "node scripts/check-node-security.ts"
   },
   "dependencies": {
     "@fastify/cors": "11.3.1",

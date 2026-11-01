@@ -18,6 +18,7 @@ const envSchema = z.object({
   DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
   CORS_ALLOWED_ORIGINS: commaSeparatedUrls,
   RATE_LIMIT_MAX_PER_MINUTE: z.coerce.number().int().positive().default(120),
+  TRUSTED_PROXY_HOPS: z.coerce.number().int().min(0).default(0),
 });
 
 export type Env = z.infer<typeof envSchema>;

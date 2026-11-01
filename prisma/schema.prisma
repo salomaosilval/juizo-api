@@ -6,3 +6,59 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+enum ConsentType {
+  TERMS_OF_USE
+  PRIVACY_POLICY
+  AI_DATA_PROCESSING
+
+  @@map("consent_type")
+}
+
+model User {
+  id           String    @id @default(uuid(7)) @db.Uuid
+  name         String
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sessions     Session[]
+  consents     Consent[]
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  tokenHash    String   @unique @map("token_hash")
+  isPersistent Boolean  @map("is_persistent")
+  expiresAt    DateTime @map("expires_at") @db.Timestamptz(3)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Consent {
+  id        String      @id @default(uuid(7)) @db.Uuid
+  userId    String      @map("user_id") @db.Uuid
+  type      ConsentType
+  version   String
+  grantedAt DateTime    @map("granted_at") @db.Timestamptz(3)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type, version])
+  @@map("consents")
+}
+
+model AttemptCounter {
+  key             String   @id
+  attemptCount    Int      @map("attempt_count")
+  windowStartedAt DateTime @map("window_started_at") @db.Timestamptz(3)
+
+  @@index([windowStartedAt])
+  @@map("attempt_counters")
+}

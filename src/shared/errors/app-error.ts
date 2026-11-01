@@ -1,8 +1,18 @@
-export type AppErrorCode = 'NOT_FOUND' | 'SERVICE_UNAVAILABLE';
+export type AppErrorCode =
+  | 'FORBIDDEN_ORIGIN'
+  | 'INVALID_CREDENTIALS'
+  | 'NOT_FOUND'
+  | 'SERVICE_UNAVAILABLE'
+  | 'TOO_MANY_ATTEMPTS'
+  | 'UNAUTHENTICATED';
 
 const HTTP_STATUS_BY_CODE: Record<AppErrorCode, number> = {
+  FORBIDDEN_ORIGIN: 403,
+  INVALID_CREDENTIALS: 401,
   NOT_FOUND: 404,
   SERVICE_UNAVAILABLE: 503,
+  TOO_MANY_ATTEMPTS: 429,
+  UNAUTHENTICATED: 401,
 };
 
 export class AppError extends Error {

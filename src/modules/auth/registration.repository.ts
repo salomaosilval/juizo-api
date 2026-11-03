@@ -1,7 +1,8 @@
-import { ConsentType } from '../../generated/prisma/client.js';
 import { isUniqueConstraintViolation } from '../../shared/database/prisma-client.js';
 import type { DatabaseClient } from '../../shared/database/prisma-client.js';
 import type { UserRecord } from './auth.repository.js';
+import { buildConsentRows } from './consents.js';
+import type { ConsentVersions } from './consents.js';
 
 export interface NewRegistrationToken {
   tokenHash: string;
@@ -9,12 +10,10 @@ export interface NewRegistrationToken {
   expiresAt: Date;
 }
 
-export interface CompletedRegistration {
+export interface CompletedRegistration extends ConsentVersions {
   tokenHash: string;
   name: string;
   passwordHash: string;
-  termsVersion: string;
-  aiDataProcessingVersion: string | null;
   now: Date;
 }
 
@@ -49,14 +48,7 @@ export function createRegistrationRepository(database: DatabaseClient): Registra
       return token?.email ?? null;
     },
 
-    async completeRegistration({
-      tokenHash,
-      name,
-      passwordHash,
-      termsVersion,
-      aiDataProcessingVersion,
-      now,
-    }) {
+    async completeRegistration({ tokenHash, name, passwordHash, now, ...consentVersions }) {
       try {
         return await database.$transaction(async (transaction) => {
           const token = await transaction.registrationToken.findUnique({ where: { tokenHash } });
@@ -79,21 +71,7 @@ export function createRegistrationRepository(database: DatabaseClient): Registra
               email,
               name,
               passwordHash,
-              consents: {
-                create: [
-                  { type: ConsentType.TERMS_OF_USE, version: termsVersion, grantedAt: now },
-                  { type: ConsentType.PRIVACY_POLICY, version: termsVersion, grantedAt: now },
-                  ...(aiDataProcessingVersion
-                    ? [
-                        {
-                          type: ConsentType.AI_DATA_PROCESSING,
-                          version: aiDataProcessingVersion,
-                          grantedAt: now,
-                        },
-                      ]
-                    : []),
-                ],
-              },
+              consents: { create: buildConsentRows(consentVersions, now) },
             },
             select: { id: true, name: true, email: true },
           });

@@ -17,6 +17,7 @@ The design is in Portuguese and the code is in English. Some Portuguese words co
 | Financiamento / empréstimo   | `Loan`                 | A debt to an institution                        |
 | Dívida com pessoa            | `PersonalDebt`         | A debt to a person the user knows               |
 | Automação                    | `Automation`           | A rule that creates entries or sends alerts     |
+| Identidade externa           | `UserIdentity`         | A login at another provider, such as Google     |
 | Crédito de IA                | `AiCredit`             | The unit consumed by Ju                         |
 | Raio-X                       | `FinancialCheckup`     | The summary that closes the onboarding          |
 | Saúde financeira             | `FinancialHealthScore` | The 0 to 100 score                              |

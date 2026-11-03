@@ -9,6 +9,11 @@ import { createAttemptRepository } from './attempt.repository.js';
 import { createAuthRepository } from './auth.repository.js';
 import { authRoutes } from './auth.routes.js';
 import { createAuthService } from './auth.service.js';
+import { googleAuthRoutes } from './google-auth.routes.js';
+import { createGoogleAuthRepository } from './google-auth.repository.js';
+import { createGoogleAuthService } from './google-auth.service.js';
+import { createGoogleFlowCookie } from './google-flow-cookie.js';
+import type { GoogleIdentityProvider } from './google-identity-provider.js';
 import { createPasswordHasher } from './password-hasher.js';
 import { createPasswordRecoveryRepository } from './password-recovery.repository.js';
 import { createPasswordRecoveryService } from './password-recovery.service.js';
@@ -20,6 +25,8 @@ import { generateSecretToken } from './secret-token.js';
 import { createSessionCookie } from './session-cookie.js';
 
 export { getAuthenticatedUser } from './require-auth.js';
+export { createGoogleIdentityProvider } from './google-identity-provider.js';
+export type { GoogleIdentityProvider } from './google-identity-provider.js';
 export type { RequireAuth } from './require-auth.js';
 
 interface AuthModuleDependencies {
@@ -29,6 +36,7 @@ interface AuthModuleDependencies {
   emailSender: EmailSender;
   backgroundTasks: BackgroundTasks;
   webAppUrl: string;
+  google: { identityProvider: GoogleIdentityProvider; redirectUrl: string } | null;
 }
 
 export async function registerAuthModule(
@@ -40,6 +48,7 @@ export async function registerAuthModule(
     emailSender,
     backgroundTasks,
     webAppUrl,
+    google,
   }: AuthModuleDependencies,
 ): Promise<RequireAuth> {
   await app.register(cookie);
@@ -82,6 +91,25 @@ export async function registerAuthModule(
     requireAuth,
     sessionCookie,
   });
+
+  if (google) {
+    await app.register(googleAuthRoutes, {
+      authService,
+      googleAuthService: createGoogleAuthService({
+        repository: createGoogleAuthRepository(database),
+        attemptLimiter,
+        emailSender,
+        backgroundTasks,
+        clock,
+        webAppUrl,
+      }),
+      identityProvider: google.identityProvider,
+      flowCookie: createGoogleFlowCookie(useSecureCookies),
+      sessionCookie,
+      webAppUrl,
+      redirectUrl: google.redirectUrl,
+    });
+  }
 
   return requireAuth;
 }

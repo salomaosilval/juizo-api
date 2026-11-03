@@ -34,7 +34,12 @@ export interface Authentication {
 
 export interface AuthService {
   login(input: LoginInput): Promise<{ user: UserRecord; session: IssuedSession }>;
-  startSession(userId: string): Promise<IssuedSession>;
+  startSession(userId: string, isPersistent: boolean): Promise<IssuedSession>;
+  startGoogleSession(
+    userId: string,
+    subject: string,
+    isPersistent: boolean,
+  ): Promise<IssuedSession | null>;
   logout(token: string): Promise<void>;
   authenticate(token: string): Promise<Authentication>;
 }
@@ -68,11 +73,12 @@ export function createAuthService({
       }
 
       const credentials = await repository.findCredentialsByEmail(email);
+      const storedHash = credentials?.passwordHash ?? null;
       const isPasswordValid = await passwordHasher.verify(
         password,
-        credentials?.passwordHash ?? decoyPasswordHash,
+        storedHash ?? decoyPasswordHash,
       );
-      if (!credentials || !isPasswordValid) {
+      if (!credentials || storedHash === null || !isPasswordValid) {
         throw new AppError('INVALID_CREDENTIALS', 'Email or password is incorrect.');
       }
 
@@ -89,7 +95,7 @@ export function createAuthService({
           isPersistent: rememberMe,
           expiresAt,
         },
-        credentials.passwordHash,
+        storedHash,
       );
       if (!isSessionCreated) {
         throw new AppError('INVALID_CREDENTIALS', 'Email or password is incorrect.');
@@ -101,16 +107,26 @@ export function createAuthService({
       };
     },
 
-    async startSession(userId) {
+    async startSession(userId, isPersistent) {
       const token = generateSecretToken();
-      const expiresAt = computeSessionExpiry(clock.now(), false);
+      const expiresAt = computeSessionExpiry(clock.now(), isPersistent);
       await repository.createSession({
         userId,
         tokenHash: hashSecret(token),
-        isPersistent: false,
+        isPersistent,
         expiresAt,
       });
       return { token, expiresAt };
+    },
+
+    async startGoogleSession(userId, subject, isPersistent) {
+      const token = generateSecretToken();
+      const expiresAt = computeSessionExpiry(clock.now(), isPersistent);
+      const isCreated = await repository.createSessionIfGoogleIdentityLinked(
+        { userId, tokenHash: hashSecret(token), isPersistent, expiresAt },
+        subject,
+      );
+      return isCreated ? { token, expiresAt } : null;
     },
 
     async logout(token) {

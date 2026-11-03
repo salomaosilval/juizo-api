@@ -8,6 +8,7 @@ const validSource = {
   DATABASE_URL: 'postgresql://user:secret@localhost:5432/juizo',
   CORS_ALLOWED_ORIGINS: 'https://app.juizo.com, https://juizo.com',
   WEB_APP_URL: 'https://app.juizo.com',
+  TRUSTED_PROXY_HOPS: '1',
   EMAIL_PROVIDER: 'resend',
   EMAIL_FROM_ADDRESS: 'ola@juizo.com',
   RESEND_API_KEY: 're_secret',
@@ -83,6 +84,35 @@ describe('parseEnv', () => {
     });
 
     expect(env.MAILPIT_URL).toBe('http://localhost:8025');
+  });
+
+  it('requires the proxy setting in production, where a wrong default blocks every user', () => {
+    expect(() => parseEnv({ ...validSource, TRUSTED_PROXY_HOPS: undefined })).toThrow(
+      /TRUSTED_PROXY_HOPS/,
+    );
+  });
+
+  it('requires all the Google settings together', () => {
+    expect(() => parseEnv({ ...validSource, GOOGLE_CLIENT_ID: 'client-id' })).toThrow(
+      /GOOGLE_CLIENT_ID/,
+    );
+  });
+
+  it('accepts complete Google settings, and refuses a redirect without https in production', () => {
+    const google = {
+      GOOGLE_CLIENT_ID: 'client-id',
+      GOOGLE_CLIENT_SECRET: 'client-secret',
+      GOOGLE_REDIRECT_URL: 'https://api.juizo.com/auth/google/callback',
+    };
+
+    expect(parseEnv({ ...validSource, ...google }).GOOGLE_CLIENT_ID).toBe('client-id');
+    expect(() =>
+      parseEnv({
+        ...validSource,
+        ...google,
+        GOOGLE_REDIRECT_URL: 'http://api.juizo.com/auth/google/callback',
+      }),
+    ).toThrow(/GOOGLE_REDIRECT_URL/);
   });
 
   it('names the invalid keys without exposing their values', () => {

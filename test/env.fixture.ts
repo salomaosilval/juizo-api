@@ -16,6 +16,9 @@ export function buildTestEnv(overrides: Partial<Env> = {}): Env {
     EMAIL_FROM_ADDRESS: 'ola@juizo.test',
     MAILPIT_URL: 'http://127.0.0.1:1',
     RESEND_API_KEY: undefined,
+    GOOGLE_CLIENT_ID: undefined,
+    GOOGLE_CLIENT_SECRET: undefined,
+    GOOGLE_REDIRECT_URL: undefined,
     ...overrides,
   };
 }

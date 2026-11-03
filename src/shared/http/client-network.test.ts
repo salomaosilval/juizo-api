@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { toClientNetwork } from './client-network.js';
+import { toClientAllocation, toClientNetwork } from './client-network.js';
+
+describe('toClientAllocation', () => {
+  it('groups the subnets of one IPv6 /48, which a single customer can rotate through', () => {
+    expect(toClientAllocation('2001:db8:1:2::1')).toBe('2001:0db8:0001::/48');
+    expect(toClientAllocation('2001:db8:1:ffff::1')).toBe('2001:0db8:0001::/48');
+  });
+
+  it('keeps an IPv4 address as it is', () => {
+    expect(toClientAllocation('203.0.113.9')).toBe('203.0.113.9');
+  });
+});
 
 describe('toClientNetwork', () => {
   it('keeps an IPv4 address as it is', () => {

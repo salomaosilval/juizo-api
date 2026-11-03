@@ -6,12 +6,10 @@ import { clientAttemptKey, emailAndClientAttemptKey, emailAttemptKey } from './a
 import type { AttemptLimiter } from './attempt-limiter.js';
 import { buildAccountAlreadyExistsEmail, buildRegistrationLinkEmail } from './auth-emails.js';
 import type { UserRecord } from './auth.repository.js';
+import { currentConsentVersions } from './consent-versions.js';
 import type { PasswordHasher } from './password-hasher.js';
 import type { RegistrationRepository } from './registration.repository.js';
 import { generateSecretToken, hashSecret } from './secret-token.js';
-
-const CURRENT_TERMS_VERSION = '1';
-const CURRENT_AI_DATA_PROCESSING_VERSION = '1';
 
 const MINUTE_IN_MS = 60_000;
 const HOUR_IN_MS = 60 * MINUTE_IN_MS;
@@ -138,10 +136,7 @@ export function createRegistrationService({
         tokenHash,
         name,
         passwordHash: await passwordHasher.hash(password),
-        termsVersion: CURRENT_TERMS_VERSION,
-        aiDataProcessingVersion: hasConsentedToAiDataProcessing
-          ? CURRENT_AI_DATA_PROCESSING_VERSION
-          : null,
+        ...currentConsentVersions(hasConsentedToAiDataProcessing),
         now: clock.now(),
       });
       if (!user) {

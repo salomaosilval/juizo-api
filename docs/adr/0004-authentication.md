@@ -14,7 +14,7 @@ Juízo holds personal financial data. The product needs email and password, Goog
 - Responses do not reveal whether an email has an account.
 - Emails per address are limited per client network with a higher overall ceiling, so a single attacker cannot use up the owner's quota.
 - A login creates its session only if the password is still the one it verified, so a login racing with a password reset leaves no session behind.
-- Failed logins are limited per client network, per email and client network, and per email overall, with counters in Postgres. IPv6 clients are counted by their /64. One attacker cannot lock out the owner, because the 10 attempts per email count per network. The overall ceiling of 100 per email in 15 minutes caps distributed guessing, and also blocks a correct password, so only a distributed attack can cause a lockout.
+- Failed logins are limited per client network, per email and client network, and per email overall, with counters in Postgres. IPv6 clients are counted by their /48, which one customer can rotate through. The 10 attempts per email count per network, so an attacker on one network cannot lock out the owner. The overall ceiling of 100 per email in 15 minutes caps distributed guessing and also blocks a correct password, so an attack from many networks can still cause a lockout.
 - API and web must share a registrable domain, because the CSRF defense is `SameSite` plus an `Origin` check on writes.
 - The rest of the system depends only on `requireAuth`, so the implementation can be replaced.
 - Registration happens in two steps. The first step asks only for the email and sends a link. The link opens the form for name, password, terms and consents, so nothing an unverified person types is ever kept, and registering someone else's email cannot affect that person's account. An account exists only after this second step, which also signs the person in. There are no unverified users to hijack through a later Google sign-in.
@@ -22,6 +22,11 @@ Juízo holds personal financial data. The product needs email and password, Goog
 - Links carry their token in the URL fragment, which servers and referrers never receive, and the frontend submits it with `POST`, so email scanners that open links do not consume them.
 - Work that would reveal through timing whether an email exists runs after the response, in background tasks that are drained on shutdown. Raw tokens are never stored, so a lost email is recovered by requesting a new link rather than by a queue.
 - Email goes through Resend with `fetch`, without its SDK, and through Mailpit locally.
+- Google sign-in uses the code flow on the server with PKCE, state and nonce kept in a short-lived `HttpOnly` cookie, through `openid-client`. It stays disabled until its three settings exist.
+- Google is trusted about an email only where it is authoritative, for `@gmail.com` and for Workspace addresses matching `hd`, as its documentation advises. Elsewhere the address may have changed owner since Google verified it. Such an address never links to an existing account, which must sign in with its password, and creating a new account requires a link sent to that mailbox.
+- Recovering the password also removes linked Google identities, so the owner can always expel an intruder. A later Google sign-in links again if Google is authoritative. Sessions start only if the identity is still linked, so a sign-in racing with a recovery leaves no session.
+- A new person only becomes an account after accepting the terms, on a link kept in the URL fragment for 30 minutes. The form must show the email clearly, because this link is not bound to the browser.
+- Query strings are removed from request logs, since they can carry authorization codes.
 - Two-factor authentication is optional for users.
 
 ## Alternatives

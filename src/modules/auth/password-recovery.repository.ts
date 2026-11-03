@@ -55,6 +55,7 @@ export function createPasswordRecoveryRepository(
           select: { email: true },
         });
         await transaction.session.deleteMany({ where: { userId } });
+        await transaction.userIdentity.deleteMany({ where: { userId } });
         await transaction.passwordResetToken.deleteMany({ where: { userId } });
         return email;
       });

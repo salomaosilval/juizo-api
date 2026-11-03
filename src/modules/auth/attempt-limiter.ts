@@ -1,4 +1,4 @@
-import { toClientNetwork } from '../../shared/http/client-network.js';
+import { toClientAllocation } from '../../shared/http/client-network.js';
 import type { Clock } from '../../shared/time/clock.js';
 import type { AttemptRepository } from './attempt.repository.js';
 import { hashSecret } from './secret-token.js';
@@ -19,11 +19,11 @@ export function emailAttemptKey(action: string, email: string): string {
 }
 
 export function emailAndClientAttemptKey(action: string, email: string, clientIp: string): string {
-  return `${action}:email-client:${hashSecret(email)}:${toClientNetwork(clientIp)}`;
+  return `${action}:email-client:${hashSecret(email)}:${toClientAllocation(clientIp)}`;
 }
 
 export function clientAttemptKey(action: string, clientIp: string): string {
-  return `${action}:ip:${toClientNetwork(clientIp)}`;
+  return `${action}:ip:${toClientAllocation(clientIp)}`;
 }
 
 export function createAttemptLimiter(repository: AttemptRepository, clock: Clock): AttemptLimiter {

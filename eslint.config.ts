@@ -91,5 +91,11 @@ export default defineConfig([
       ],
     },
   },
+  {
+    files: ['src/modules/auth/google-identity-provider.test.ts'],
+    rules: {
+      '@typescript-eslint/no-deprecated': 'off',
+    },
+  },
   prettier,
 ]);

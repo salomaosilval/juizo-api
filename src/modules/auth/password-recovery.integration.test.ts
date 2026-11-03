@@ -184,7 +184,7 @@ describe('password recovery', () => {
 
       const isCreated = await createAuthRepository(test.database).createSessionIfPasswordUnchanged(
         { userId, tokenHash: 'stale-login', isPersistent: true, expiresAt: new Date() },
-        passwordHash,
+        passwordHash ?? '',
       );
 
       expect(isCreated).toBe(false);

@@ -4,6 +4,7 @@ import type { Env } from '../src/config/env.js';
 import { createDatabaseClient } from '../src/shared/database/prisma-client.js';
 import type { DatabaseClient } from '../src/shared/database/prisma-client.js';
 import type { EmailMessage } from '../src/shared/email/email-sender.js';
+import type { GoogleProfile } from '../src/modules/auth/google-identity-provider.js';
 import { createBackgroundTasks } from '../src/shared/tasks/background-tasks.js';
 import { buildTestEnv } from './env.fixture.js';
 
@@ -20,12 +21,22 @@ export const TEST_PROFILE = {
   hasConsentedToAiDataProcessing: true,
 };
 
+export const DEFAULT_GOOGLE_PROFILE: GoogleProfile = {
+  subject: 'google-subject',
+  email: TEST_EMAIL,
+  isEmailVerified: true,
+  isGoogleAuthoritativeForEmail: true,
+  name: 'Rafael do Google',
+};
+
 export interface AuthTestApp {
   app: FastifyInstance;
   database: DatabaseClient;
   sentEmails: EmailMessage[];
   backgroundFailures: object[];
   failEmails(shouldFail: boolean): void;
+  drainBackgroundTasks(): Promise<void>;
+  googleProfile: GoogleProfile;
   advanceTime(milliseconds: number): void;
   reset(): Promise<void>;
   post(url: string, payload?: object, options?: InjectOptions): Promise<LightMyRequestResponse>;
@@ -41,7 +52,13 @@ export async function createAuthTestApp(
   databaseUrl: string,
   envOverrides: Partial<Env> = {},
 ): Promise<AuthTestApp> {
-  const env = buildTestEnv({ DATABASE_URL: databaseUrl, ...envOverrides });
+  const env = buildTestEnv({
+    DATABASE_URL: databaseUrl,
+    GOOGLE_CLIENT_ID: 'test-client',
+    GOOGLE_CLIENT_SECRET: 'test-secret',
+    GOOGLE_REDIRECT_URL: 'https://api.juizo.test/auth/google/callback',
+    ...envOverrides,
+  });
   const database = createDatabaseClient(env.DATABASE_URL);
   const sentEmails: EmailMessage[] = [];
   const backgroundFailures: object[] = [];
@@ -50,12 +67,30 @@ export async function createAuthTestApp(
   });
   let currentTime = TEST_START_TIME;
   let shouldFailEmails = false;
+  const googleProfileHolder = { profile: DEFAULT_GOOGLE_PROFILE };
 
   const app = await buildApp({
     env,
     database,
     clock: { now: () => currentTime },
     backgroundTasks,
+    googleIdentityProvider: {
+      createAuthorizationRequest: () =>
+        Promise.resolve({
+          url: 'https://accounts.google.test/authorize',
+          checks: {
+            state: 'expected-state',
+            nonce: 'expected-nonce',
+            codeVerifier: 'expected-verifier',
+          },
+        }),
+      exchangeCode(callbackUrl, checks) {
+        if (callbackUrl.searchParams.get('state') !== checks.state) {
+          return Promise.reject(new Error('State mismatch.'));
+        }
+        return Promise.resolve(googleProfileHolder.profile);
+      },
+    },
     emailSender: {
       send(message) {
         if (shouldFailEmails) {
@@ -93,6 +128,13 @@ export async function createAuthTestApp(
     backgroundFailures,
     post,
     tokenFromLastEmail,
+    get googleProfile() {
+      return googleProfileHolder.profile;
+    },
+    set googleProfile(profile) {
+      googleProfileHolder.profile = profile;
+    },
+    drainBackgroundTasks: () => backgroundTasks.drain(),
     failEmails(shouldFail) {
       shouldFailEmails = shouldFail;
     },
@@ -102,9 +144,10 @@ export async function createAuthTestApp(
     async reset() {
       currentTime = TEST_START_TIME;
       shouldFailEmails = false;
+      googleProfileHolder.profile = DEFAULT_GOOGLE_PROFILE;
       sentEmails.length = 0;
       backgroundFailures.length = 0;
-      await database.$executeRaw`TRUNCATE users, attempt_counters, registration_tokens CASCADE`;
+      await database.$executeRaw`TRUNCATE users, attempt_counters, registration_tokens, google_signup_tokens CASCADE`;
     },
     login(overrides = {}, options = {}) {
       return post(

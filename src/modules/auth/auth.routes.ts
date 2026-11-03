@@ -1,6 +1,7 @@
 import type { FastifyPluginAsyncZod } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { errorResponseSchema } from '../../shared/http/error-response.js';
+import { displayNameSchema, tokenSchema, userResponseSchema } from './auth.schemas.js';
 import type { AuthService } from './auth.service.js';
 import type { PasswordRecoveryService } from './password-recovery.service.js';
 import type { RegistrationService } from './registration.service.js';
@@ -11,22 +12,13 @@ import type { SessionCookie } from './session-cookie.js';
 const MIN_PASSWORD_LENGTH = 10;
 const MAX_PASSWORD_LENGTH = 128;
 const MAX_EMAIL_LENGTH = 254;
-const MAX_NAME_LENGTH = 80;
-const MAX_TOKEN_LENGTH = 128;
-const CONTROL_CHARACTERS = /\p{Cc}/u;
 
 const emailSchema = z.string().trim().toLowerCase().max(MAX_EMAIL_LENGTH).pipe(z.email());
 const newPasswordSchema = z.string().min(MIN_PASSWORD_LENGTH).max(MAX_PASSWORD_LENGTH);
-const tokenSchema = z.string().min(1).max(MAX_TOKEN_LENGTH);
 
 const registrationCompletionBodySchema = z.object({
   token: tokenSchema,
-  name: z
-    .string()
-    .trim()
-    .min(1)
-    .max(MAX_NAME_LENGTH)
-    .refine((name) => !CONTROL_CHARACTERS.test(name)),
+  name: displayNameSchema,
   password: newPasswordSchema,
   hasAcceptedTerms: z.literal(true),
   hasConsentedToAiDataProcessing: z.boolean(),
@@ -36,10 +28,6 @@ const loginBodySchema = z.object({
   email: emailSchema,
   password: z.string().min(1).max(MAX_PASSWORD_LENGTH),
   rememberMe: z.boolean().default(false),
-});
-
-const userResponseSchema = z.object({
-  user: z.object({ id: z.uuid(), name: z.string(), email: z.email() }),
 });
 
 const acceptedResponseSchema = z.object({ status: z.literal('accepted') });
@@ -105,7 +93,7 @@ export const authRoutes: FastifyPluginAsyncZod<AuthRoutesOptions> = (
     },
     async ({ body, ip }, reply) => {
       const user = await registrationService.complete({ ...body, clientIp: ip });
-      const session = await authService.startSession(user.id);
+      const session = await authService.startSession(user.id, false);
       sessionCookie.write(reply, session.token, session.expiresAt);
       return reply.status(201).send({ user });
     },

@@ -184,15 +184,15 @@ describe('sessions', () => {
       expect(victim.statusCode).toBe(200);
     });
 
-    it('limits an IPv6 client by its /64, so rotating addresses does not help', async () => {
+    it('limits an IPv6 client by its /48, so rotating subnets does not help', async () => {
       for (let attempt = 0; attempt < 30; attempt += 1) {
         await test.login(
           { email: `user${attempt}@example.com` },
-          { remoteAddress: `2001:db8:1:2::${attempt + 1}` },
+          { remoteAddress: `2001:db8:1:${attempt + 1}::1` },
         );
       }
 
-      const response = await test.login({}, { remoteAddress: '2001:db8:1:2::ffff' });
+      const response = await test.login({}, { remoteAddress: '2001:db8:1:ffff::1' });
 
       expect(response.statusCode).toBe(429);
     });

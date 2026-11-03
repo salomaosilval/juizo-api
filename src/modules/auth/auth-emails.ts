@@ -102,6 +102,36 @@ export function buildAccountAlreadyExistsEmail(to: string, webAppUrl: string): E
   });
 }
 
+export function buildGoogleSignupLinkEmail(
+  to: string,
+  webAppUrl: string,
+  token: string,
+): EmailMessage {
+  return buildEmail({
+    to,
+    subject: 'Confirme seu e-mail para criar sua conta no Juízo',
+    title: 'Falta só confirmar seu e-mail.',
+    paragraphs: ['Clique no botão abaixo para criar sua conta usando o login do Google.'],
+    action: {
+      label: 'Confirmar e criar conta',
+      url: linkWithToken(webAppUrl, '/finalizar-cadastro-google', token),
+    },
+    footnote: 'O link vale por 30 minutos. Se você não pediu, ignore este e-mail: nada foi criado.',
+  });
+}
+
+export function buildGoogleLinkedEmail(to: string, webAppUrl: string): EmailMessage {
+  return buildEmail({
+    to,
+    subject: 'Sua conta do Google foi conectada ao Juízo',
+    title: 'Agora você também entra com o Google.',
+    paragraphs: ['Sua conta do Juízo foi conectada à conta do Google deste e-mail.'],
+    action: { label: 'Entrar no Juízo', url: new URL('/entrar', webAppUrl).toString() },
+    footnote:
+      'Se não foi você, use "Esqueci a senha" agora: isso encerra as sessões e desconecta o Google.',
+  });
+}
+
 export function buildPasswordResetEmail(
   to: string,
   webAppUrl: string,

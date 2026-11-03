@@ -1,3 +1,4 @@
+import { IdentityProvider } from '../../generated/prisma/client.js';
 import type { DatabaseClient } from '../../shared/database/prisma-client.js';
 
 export interface UserRecord {
@@ -7,7 +8,7 @@ export interface UserRecord {
 }
 
 export interface UserCredentials extends UserRecord {
-  passwordHash: string;
+  passwordHash: string | null;
 }
 
 export interface SessionRecord {
@@ -28,6 +29,7 @@ export interface AuthRepository {
   findCredentialsByEmail(email: string): Promise<UserCredentials | null>;
   createSession(session: NewSession): Promise<void>;
   createSessionIfPasswordUnchanged(session: NewSession, passwordHash: string): Promise<boolean>;
+  createSessionIfGoogleIdentityLinked(session: NewSession, subject: string): Promise<boolean>;
   findSessionByTokenHash(tokenHash: string): Promise<SessionRecord | null>;
   renewSession(sessionId: string, expiresAt: Date): Promise<void>;
   deleteSession(sessionId: string): Promise<void>;
@@ -54,6 +56,21 @@ export function createAuthRepository(database: DatabaseClient): AuthRepository {
         const [user] = await transaction.$queryRaw<{ password_hash: string }[]>`
           SELECT password_hash FROM users WHERE id = ${session.userId}::uuid FOR SHARE`;
         if (user?.password_hash !== passwordHash) {
+          return false;
+        }
+        await transaction.session.create({ data: session });
+        return true;
+      });
+    },
+
+    createSessionIfGoogleIdentityLinked(session, subject) {
+      return database.$transaction(async (transaction) => {
+        await transaction.$queryRaw`SELECT id FROM users WHERE id = ${session.userId}::uuid FOR SHARE`;
+        const identity = await transaction.userIdentity.findFirst({
+          where: { userId: session.userId, provider: IdentityProvider.GOOGLE, subject },
+          select: { id: true },
+        });
+        if (!identity) {
           return false;
         }
         await transaction.session.create({ data: session });
